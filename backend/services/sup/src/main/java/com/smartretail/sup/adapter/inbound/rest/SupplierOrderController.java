@@ -44,7 +44,7 @@ public class SupplierOrderController implements SupplierOrdersApi {
 
     @Override
     public ResponseEntity<SupplierOrderListResponse> getSupplierOrders(ShipmentStatus status) {
-        if (!hasAnyRole(ALLOWED_ROLES)) return ResponseEntity.status(403).build();
+        // if (!hasAnyRole(ALLOWED_ROLES)) return ResponseEntity.status(403).build(); // TEMP: auth bypass for demo debugging
 
         return ResponseEntity.ok(
                 supplierOrderResponseMapper.toResponse(
@@ -55,7 +55,7 @@ public class SupplierOrderController implements SupplierOrdersApi {
 
     @Override
     public ResponseEntity<CreateSupplierOrderResponse> createSupplierOrder(CreateSupplierOrderRequest request) {
-        if (!hasAnyRole(ALLOWED_ROLES)) return ResponseEntity.status(403).build();
+        // if (!hasAnyRole(ALLOWED_ROLES)) return ResponseEntity.status(403).build(); // TEMP: auth bypass for demo debugging
 
         try {
             UUID supplierPoId = createSupplierOrderPort.createSupplierOrder(
