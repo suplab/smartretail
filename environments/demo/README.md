@@ -66,6 +66,9 @@ cd environments/demo/infra && AWS_PROFILE=smartretail-dev SMARTRETAIL_ENV=demo \
 make demo-push-flyway DEMO_ENV=demo DEMO_PROFILE=smartretail-dev
 make demo-migrate DEMO_ENV=demo DEMO_PROFILE=smartretail-dev
 
+# 3a. Reset database between demo runs
+make demo-reset-db DEMO_ENV=demo DEMO_PROFILE=smartretail-dev
+
 # 4. Build and deploy SC Planner MFE to S3
 make demo-deploy-mfe DEMO_ENV=demo DEMO_PROFILE=smartretail-dev
 

@@ -18,7 +18,7 @@ Five React applications that form the SmartRetail user-facing layer. Each runs a
 | MFE              | Port | Primary backing services                          |
 | ---------------- | ---- | ------------------------------------------------- |
 | `store-manager/` | 5173 | ARS (:8083), IMS (:8081)                          |
-| `sc-planner/`    | 5174 | RE (:8082), ARS (:8083), DFS (:8084), SUP (:8085) |
+| `sc-planner/`    | 5174 | RE (:8082), ARS (:8083), DFS (:8084), SUP (:8085), IMS (:8081) |
 | `executive/`     | 5175 | ARS (:8083), DFS (:8084)                          |
 | `supplier/`      | 5177 | SUP (:8085)                                       |
 
