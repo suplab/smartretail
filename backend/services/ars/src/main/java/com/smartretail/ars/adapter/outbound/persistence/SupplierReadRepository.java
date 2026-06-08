@@ -73,7 +73,7 @@ public class SupplierReadRepository implements SupplierReadPort {
     private static final String SUPPLIER_ORDERS_SQL = """
             SELECT
                 sp.supplier_po_id,
-                CAST(sp.po_id AS UUID)    AS po_id,
+                sp.po_id,
                 sp.supplier_id,
                 sr.supplier_name,
                 sp.sku_id,
@@ -154,7 +154,7 @@ public class SupplierReadRepository implements SupplierReadPort {
                 .addValue("status", status, Types.VARCHAR);
         return jdbc.query(SUPPLIER_ORDERS_SQL, params, (rs, rowNum) -> new SupplierOrderRow(
                 rs.getObject("supplier_po_id", UUID.class),
-                rs.getObject("po_id", UUID.class),
+                parseUuidSafe(rs.getString("po_id")),
                 rs.getObject("supplier_id", UUID.class),
                 rs.getString("supplier_name"),
                 rs.getString("sku_id"),
@@ -169,6 +169,15 @@ public class SupplierReadRepository implements SupplierReadPort {
                 rs.getTimestamp("last_update_at") != null
                         ? rs.getTimestamp("last_update_at").toInstant() : null
         ));
+    }
+
+    private static UUID parseUuidSafe(String value) {
+        if (value == null || value.isBlank()) return null;
+        try {
+            return UUID.fromString(value.trim());
+        } catch (IllegalArgumentException e) {
+            return null; // po_id is a legacy varchar — not all rows have valid UUID format
+        }
     }
 
     @Override
