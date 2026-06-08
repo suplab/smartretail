@@ -1,6 +1,5 @@
 package com.smartretail.sup.adapter.inbound.rest;
 
-import com.smartretail.sup.domain.model.SupplierRecordList;
 import com.smartretail.sup.port.inbound.SupplierQueryPort;
 import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.BeforeEach;
@@ -35,7 +34,6 @@ class GlobalExceptionHandlerTest {
 
     @Test
     void handleUnexpected_serviceThrows_returns500WithErrorBody() throws Exception {
-        when(httpRequest.getHeader("X-Dev-Role")).thenReturn("ADMIN");
         when(supplierQueryPort.getSuppliers())
                 .thenThrow(new RuntimeException("database connection lost"));
 
@@ -47,7 +45,6 @@ class GlobalExceptionHandlerTest {
 
     @Test
     void handleUnexpected_runtimeException_returns500() throws Exception {
-        when(httpRequest.getHeader("X-Dev-Role")).thenReturn("SC_PLANNER");
         when(supplierQueryPort.getSuppliers())
                 .thenThrow(new IllegalStateException("unexpected state"));
 
