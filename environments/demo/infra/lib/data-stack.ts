@@ -1,11 +1,11 @@
-import * as cdk from 'aws-cdk-lib';
-import * as ec2 from 'aws-cdk-lib/aws-ec2';
-import * as ecr from 'aws-cdk-lib/aws-ecr';
-import * as rds from 'aws-cdk-lib/aws-rds';
-import * as logs from 'aws-cdk-lib/aws-logs';
-import * as ssm from 'aws-cdk-lib/aws-ssm';
-import { Construct } from 'constructs';
-import { NetworkStack } from './network-stack';
+import * as cdk from "aws-cdk-lib";
+import * as ec2 from "aws-cdk-lib/aws-ec2";
+import * as ecr from "aws-cdk-lib/aws-ecr";
+import * as rds from "aws-cdk-lib/aws-rds";
+import * as logs from "aws-cdk-lib/aws-logs";
+import * as ssm from "aws-cdk-lib/aws-ssm";
+import { Construct } from "constructs";
+import { NetworkStack } from "./network-stack";
 
 export interface DataStackProps extends cdk.StackProps {
   srEnv: string;
@@ -13,7 +13,7 @@ export interface DataStackProps extends cdk.StackProps {
 }
 
 // Services whose ECR repos must exist before ComputeStack deploys ECS services.
-const DEMO_SERVICES = ['ims', 're', 'ars', 'dfs', 'sup'] as const;
+const DEMO_SERVICES = ["sis", "ims", "re", "ars", "dfs", "sup"] as const;
 
 export class DataStack extends cdk.Stack {
   public readonly dbEndpoint: string;
@@ -23,12 +23,12 @@ export class DataStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: DataStackProps) {
     super(scope, id, props);
 
-    cdk.Tags.of(this).add('Name', 'smartretail-data-demo');
+    cdk.Tags.of(this).add("Name", "smartretail-data-demo");
 
     const { srEnv, network } = props;
 
     // RDS — public subnet (default VPC has no isolated subnets); access restricted to ECS SG only
-    this.rdsInstance = new rds.DatabaseInstance(this, 'Rds', {
+    this.rdsInstance = new rds.DatabaseInstance(this, "Rds", {
       instanceIdentifier: `smartretail-rds-${srEnv}`,
       engine: rds.DatabaseInstanceEngine.postgres({
         version: rds.PostgresEngineVersion.VER_16_13,
@@ -39,8 +39,8 @@ export class DataStack extends cdk.Stack {
       vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
       securityGroups: [network.sgRds],
       multiAz: false,
-      databaseName: 'smartretail',
-      credentials: rds.Credentials.fromGeneratedSecret('smartretail_admin', {
+      databaseName: "smartretail",
+      credentials: rds.Credentials.fromGeneratedSecret("smartretail_admin", {
         secretName: `smartretail-rds-secret-${srEnv}`,
       }),
       backupRetention: cdk.Duration.days(0),
@@ -49,7 +49,7 @@ export class DataStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       enablePerformanceInsights: false,
       storageEncrypted: true,
-      cloudwatchLogsExports: ['postgresql'],
+      cloudwatchLogsExports: ["postgresql"],
       cloudwatchLogsRetention: logs.RetentionDays.TWO_WEEKS,
     });
 
@@ -67,12 +67,12 @@ export class DataStack extends cdk.Stack {
     }
 
     const put = (name: string, value: string) =>
-      new ssm.StringParameter(this, name.replace(/[/-]/g, ''), {
+      new ssm.StringParameter(this, name.replace(/[/-]/g, ""), {
         parameterName: `/smartretail/${srEnv}/${name}`,
         stringValue: value,
       });
 
-    put('rds/instance-endpoint', this.rdsInstance.instanceEndpoint.hostname);
-    put('rds/secret-arn', this.rdsInstance.secret!.secretArn);
+    put("rds/instance-endpoint", this.rdsInstance.instanceEndpoint.hostname);
+    put("rds/secret-arn", this.rdsInstance.secret!.secretArn);
   }
 }
