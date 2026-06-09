@@ -14,9 +14,13 @@ import java.math.RoundingMode;
 import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 
 @Service
 public class StoreManagerDashboardUseCase implements StoreManagerDashboardPort {
+
+    private static final Executor VIRTUAL = Executors.newVirtualThreadPerTaskExecutor();
 
     private final InventoryReadPort inventoryReadPort;
     private final ReplenishmentReadPort replenishmentReadPort;
@@ -33,38 +37,40 @@ public class StoreManagerDashboardUseCase implements StoreManagerDashboardPort {
 
     @Override
     public StoreManagerDashboard assemble(String dcId, int page, int size) {
-        // Parallel reads — each query is confined to its own schema (Architecture rule #1)
-        CompletableFuture<AlertKpi> alertKpiFuture =
-                CompletableFuture.supplyAsync(() -> inventoryReadPort.countActiveAlertsByDc(dcId));
+        // Parallel reads — each query is confined to its own schema (Architecture rule
+        // #1).
+        // Virtual threads (Java 21) handle blocking JDBC calls without pinning OS
+        // threads.
+        CompletableFuture<AlertKpi> alertKpiFuture = CompletableFuture
+                .supplyAsync(() -> inventoryReadPort.countActiveAlertsByDc(dcId), VIRTUAL);
 
-        CompletableFuture<Integer> alertTotalFuture =
-                CompletableFuture.supplyAsync(() -> inventoryReadPort.countActiveAlertsByDcTotal(dcId));
+        CompletableFuture<Integer> alertTotalFuture = CompletableFuture
+                .supplyAsync(() -> inventoryReadPort.countActiveAlertsByDcTotal(dcId), VIRTUAL);
 
-        CompletableFuture<List<AlertSummary>> alertsFuture =
-                CompletableFuture.supplyAsync(() -> inventoryReadPort.findActiveAlertsByDc(dcId, page, size));
+        CompletableFuture<List<AlertSummary>> alertsFuture = CompletableFuture
+                .supplyAsync(() -> inventoryReadPort.findActiveAlertsByDc(dcId, page, size), VIRTUAL);
 
-        CompletableFuture<Long> onHandFuture =
-                CompletableFuture.supplyAsync(() -> inventoryReadPort.sumOnHandByDc(dcId));
+        CompletableFuture<Long> onHandFuture = CompletableFuture
+                .supplyAsync(() -> inventoryReadPort.sumOnHandByDc(dcId), VIRTUAL);
 
-        CompletableFuture<Integer> totalSkusFuture =
-                CompletableFuture.supplyAsync(() -> inventoryReadPort.countDistinctSkusByDc(dcId));
+        CompletableFuture<Integer> totalSkusFuture = CompletableFuture
+                .supplyAsync(() -> inventoryReadPort.countDistinctSkusByDc(dcId), VIRTUAL);
 
-        CompletableFuture<Integer> pendingPoFuture =
-                CompletableFuture.supplyAsync(() -> replenishmentReadPort.countPendingApprovalsByDc(dcId));
+        CompletableFuture<Integer> pendingPoFuture = CompletableFuture
+                .supplyAsync(() -> replenishmentReadPort.countPendingApprovalsByDc(dcId), VIRTUAL);
 
-        CompletableFuture<Integer> skusWithForecastFuture =
-                CompletableFuture.supplyAsync(() -> forecastReadPort.countSkusWithForecastByDc(dcId));
+        CompletableFuture<Integer> skusWithForecastFuture = CompletableFuture
+                .supplyAsync(() -> forecastReadPort.countSkusWithForecastByDc(dcId), VIRTUAL);
 
         CompletableFuture.allOf(
                 alertKpiFuture, alertTotalFuture, alertsFuture,
-                onHandFuture, totalSkusFuture, pendingPoFuture, skusWithForecastFuture
-        ).join();
+                onHandFuture, totalSkusFuture, pendingPoFuture, skusWithForecastFuture).join();
 
         int totalAlerts = alertTotalFuture.join();
-        int totalPages  = size > 0 ? (int) Math.ceil((double) totalAlerts / size) : 0;
+        int totalPages = size > 0 ? (int) Math.ceil((double) totalAlerts / size) : 0;
 
-        int totalSkus         = totalSkusFuture.join();
-        int skusWithForecast  = skusWithForecastFuture.join();
+        int totalSkus = totalSkusFuture.join();
+        int skusWithForecast = skusWithForecastFuture.join();
         BigDecimal forecastCovPct = totalSkus > 0
                 ? BigDecimal.valueOf(100.0 * skusWithForecast / totalSkus).setScale(1, RoundingMode.HALF_UP)
                 : BigDecimal.ZERO;
@@ -78,7 +84,6 @@ public class StoreManagerDashboardUseCase implements StoreManagerDashboardPort {
                 alertsFuture.join(),
                 page,
                 totalPages,
-                Instant.now()
-        );
+                Instant.now());
     }
 }

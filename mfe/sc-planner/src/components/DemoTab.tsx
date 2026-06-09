@@ -5,6 +5,7 @@ import type {
   PurchaseOrder,
   PurchaseOrderListResponse,
 } from "../types";
+import { getApiBase } from "@smartretail/auth";
 import { useSuppliers } from "../hooks/useSuppliers";
 import { ReplenishmentFlowDiagram } from "./ReplenishmentFlowDiagram";
 
@@ -27,7 +28,7 @@ const PIPELINE_STEPS = [
   { label: "Checkout confirmed", hint: "Store till transaction received and validated" },
   { label: "Warehouse stock updated", hint: "DC inventory level automatically decremented" },
   { label: "Low-stock alert sent", hint: "Stock fell below reorder threshold — alert published to event bus" },
-  { label: "Reorder created", hint: "Replenishment Engine raised a Purchase Order for your approval" },
+  { label: "Reorder created", hint: "Replenishment Engine raised a Purchase Order for an approval" },
 ];
 
 const DC_OPTIONS = [
@@ -77,9 +78,12 @@ export function DemoTab({ onSwitchToApprovals, onDataChanged }: Props) {
   useEffect(() => {
     if (phase !== "idle" || !form.skuId || !form.dcId) return;
     let cancelled = false;
-    fetch(`/v1/inventory/positions?skuId=${encodeURIComponent(form.skuId)}&dcId=${encodeURIComponent(form.dcId)}`, {
-      headers: { "X-Dev-Role": "SC_PLANNER" },
-    })
+    fetch(
+      `${getApiBase()}/v1/inventory/positions?skuId=${encodeURIComponent(form.skuId)}&dcId=${encodeURIComponent(form.dcId)}`,
+      {
+        headers: { "X-Dev-Role": "SC_PLANNER" },
+      },
+    )
       .then((r) => (r.ok ? (r.json() as Promise<InventoryPositionListResponse>) : null))
       .then((data) => {
         if (!cancelled) setPosition(data?.positions[0] ?? null);
@@ -117,7 +121,7 @@ export function DemoTab({ onSwitchToApprovals, onDataChanged }: Props) {
       return;
     }
     try {
-      const res = await fetch("/v1/replenishment/orders?status=PENDING_APPROVAL&size=20", {
+      const res = await fetch(`${getApiBase()}/v1/replenishment/orders?status=PENDING_APPROVAL&size=20`, {
         headers: { "X-Dev-Role": "SC_PLANNER" },
       });
       if (!res.ok) return;
@@ -141,7 +145,7 @@ export function DemoTab({ onSwitchToApprovals, onDataChanged }: Props) {
     setCompleted(0);
 
     try {
-      const snap = await fetch("/v1/replenishment/orders?status=PENDING_APPROVAL&size=100", {
+      const snap = await fetch(`${getApiBase()}/v1/replenishment/orders?status=PENDING_APPROVAL&size=100`, {
         headers: { "X-Dev-Role": "SC_PLANNER" },
       });
       if (snap.ok) {
@@ -153,7 +157,7 @@ export function DemoTab({ onSwitchToApprovals, onDataChanged }: Props) {
     }
 
     try {
-      const res = await fetch("/v1/ingest/events", {
+      const res = await fetch(`${getApiBase()}/v1/ingest/events`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Dev-Role": "SC_PLANNER" },
         body: JSON.stringify({
@@ -193,7 +197,7 @@ export function DemoTab({ onSwitchToApprovals, onDataChanged }: Props) {
     if (!foundPO) return;
     setPhase("approving");
     try {
-      const res = await fetch(`/v1/replenishment/orders/${foundPO.poId}/approve`, {
+      const res = await fetch(`${getApiBase()}/v1/replenishment/orders/${foundPO.poId}/approve`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -204,7 +208,7 @@ export function DemoTab({ onSwitchToApprovals, onDataChanged }: Props) {
       });
       if (res.ok) {
         // Notify the SUP service so the order appears in the Supplier Orders tab
-        await fetch("/v1/supplier/orders", {
+        await fetch(`${getApiBase()}/v1/supplier/orders`, {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-Dev-Role": "SC_PLANNER" },
           body: JSON.stringify({
@@ -241,7 +245,7 @@ export function DemoTab({ onSwitchToApprovals, onDataChanged }: Props) {
       {/* Scenario card */}
       <div className="bg-blue-50 border border-blue-200 rounded-lg p-5">
         <h2 className="text-base font-semibold text-blue-900 mb-2">
-          A bestseller SKU just ran out at the warehouse — and nobody noticed
+          A bestseller just ran out at the warehouse — and nobody noticed
         </h2>
         <p className="text-sm text-blue-800 leading-relaxed">
           It's a busy Friday afternoon. A customer at the London flagship just bought the last pack of Pringles in the
@@ -286,6 +290,17 @@ export function DemoTab({ onSwitchToApprovals, onDataChanged }: Props) {
             </span>
           </div>
         )}
+
+        {/* Production context — shown always so the audience understands the real flow */}
+        <div className="flex gap-2 mb-4 px-3 py-2 rounded bg-amber-50 border border-amber-200 text-xs text-amber-800">
+          <span className="shrink-0 mt-0.5">ℹ</span>
+          <span>
+            <span className="font-semibold">Demo mode:</span> this button calls the Sales Ingestion Service directly to
+            simulate a checkout. In production, POS aggregator sends each transaction to{" "}
+            <span className="font-semibold">AWS Data Firehose</span>, which batches and delivers the events to SIS — the
+            same pipeline then runs automatically from there.
+          </span>
+        </div>
 
         <div className="grid grid-cols-2 gap-4 mb-5">
           <label className="block">
@@ -486,7 +501,7 @@ export function DemoTab({ onSwitchToApprovals, onDataChanged }: Props) {
               <p className="text-sm text-green-800 font-semibold mb-1">Order confirmed — supplier has been notified</p>
               <p className="text-sm text-green-700">
                 {foundPO.quantity.toLocaleString()} units of {SKU_NAMES[foundPO.skuId] ?? foundPO.skuId} are now on
-                order. Estimated arrival: 3–5 business days. Your store will have stock back on the shelves before this
+                order. Estimated arrival: 3–5 business days. The store will have stock back on the shelves before this
                 weekend's gap turns into lost sales.
               </p>
               <p className="text-xs text-green-600 mt-2">
