@@ -3,14 +3,23 @@ import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as ecs from "aws-cdk-lib/aws-ecs";
 import * as elbv2 from "aws-cdk-lib/aws-elasticloadbalancingv2";
 import * as apigw from "aws-cdk-lib/aws-apigateway";
+import * as firehose from "aws-cdk-lib/aws-kinesisfirehose";
+import * as iam from "aws-cdk-lib/aws-iam";
+import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as lambdaEventSources from "aws-cdk-lib/aws-lambda-event-sources";
+import * as s3 from "aws-cdk-lib/aws-s3";
+import * as events from "aws-cdk-lib/aws-events";
+import * as eventsTargets from "aws-cdk-lib/aws-events-targets";
 import * as ssm from "aws-cdk-lib/aws-ssm";
 import { Construct } from "constructs";
 import { NetworkStack } from "./network-stack";
 import { ComputeStack } from "./compute-stack";
+import { DataStack } from "./data-stack";
 
 export interface ApiStackProps extends cdk.StackProps {
   srEnv: string;
   network: NetworkStack;
+  data: DataStack;
   compute: ComputeStack;
 }
 
@@ -18,13 +27,15 @@ export class ApiStack extends cdk.Stack {
   public readonly apiEndpoint: string;
   /** REST API name — used by MonitoringStack for CloudWatch metric dimensions (ApiName + Stage) */
   public readonly restApiName: string;
+  public readonly firehoseStreamName: string;
+  public readonly batchPostProcessorFn: lambda.DockerImageFunction;
 
   constructor(scope: Construct, id: string, props: ApiStackProps) {
     super(scope, id, props);
 
     cdk.Tags.of(this).add("Name", "smartretail-api-demo");
 
-    const { srEnv, network, compute } = props;
+    const { srEnv, network, data, compute } = props;
 
     // ── Internal NLB ─────────────────────────────────────────────────────────
     // Demo uses the default VPC which has only public subnets — place NLB there.
@@ -154,15 +165,133 @@ export class ApiStack extends cdk.Stack {
     this.apiEndpoint = restApi.url;
     this.restApiName = restApi.restApiName;
 
-    // ── SSM outputs ───────────────────────────────────────────────────────────
-    new ssm.StringParameter(this, "ApiEndpointParam", {
-      parameterName: `/smartretail/${srEnv}/api/endpoint`,
-      stringValue: restApi.url,
+    // ── Firehose delivery stream ───────────────────────────────────────────────
+    // Delivers POS events to SIS via the existing /v1/ingest/{proxy+} API GW route.
+    // No API GW changes needed — Firehose targets the same URL as direct REST calls.
+    const firehoseRole = new iam.Role(this, "FirehoseRole", {
+      roleName: `smartretail-firehose-${srEnv}`,
+      assumedBy: new iam.ServicePrincipal("firehose.amazonaws.com"),
     });
+    data.eventsBucket.grantWrite(firehoseRole);
+
+    this.firehoseStreamName = `smartretail-ingest-${srEnv}`;
+    new firehose.CfnDeliveryStream(this, "IngestStream", {
+      deliveryStreamName: this.firehoseStreamName,
+      deliveryStreamType: "DirectPut",
+      httpEndpointDestinationConfiguration: {
+        endpointConfiguration: {
+          url: `${restApi.url}v1/ingest/events`,
+          name: `smartretail-ingest-${srEnv}`,
+          accessKey: data.firehoseAccessKeySecret.secretValue.unsafeUnwrap(),
+        },
+        bufferingHints: { sizeInMBs: 1, intervalInSeconds: 60 },
+        retryOptions: { durationInSeconds: 86400 },
+        s3BackupMode: "AllData",
+        s3Configuration: {
+          bucketArn: data.eventsBucket.bucketArn,
+          roleArn: firehoseRole.roleArn,
+          bufferingHints: { sizeInMBs: 1, intervalInSeconds: 60 },
+          compressionFormat: "GZIP",
+          prefix: "firehose/!{timestamp:yyyy/MM/dd}/",
+          errorOutputPrefix: "firehose-errors/!{firehose:error-output-type}/!{timestamp:yyyy/MM/dd}/",
+        },
+        roleArn: firehoseRole.roleArn,
+      },
+    });
+
+    // ── batch-post-processor Lambda ────────────────────────────────────────────
+    // Triggered by SageMaker transform output CSV landing in S3.
+    // Runs outside VPC — demo has no NAT gateway, so DFS is reached via API GW URL.
+    const batchProcessorRole = new iam.Role(this, "BatchProcessorRole", {
+      assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName("service-role/AWSLambdaBasicExecutionRole"),
+      ],
+    });
+    batchProcessorRole.addToPolicy(new iam.PolicyStatement({
+      actions: ["s3:GetObject"],
+      resources: [data.sagemakerBucket.arnForObjects("sagemaker/output/*")],
+    }));
+
+    this.batchPostProcessorFn = new lambda.DockerImageFunction(this, "BatchPostProcessor", {
+      functionName: `smartretail-batch-post-processor-${srEnv}`,
+      code: lambda.DockerImageCode.fromEcr(data.ecrRepos["batch-post-processor"]),
+      architecture: lambda.Architecture.ARM_64,
+      timeout: cdk.Duration.seconds(180),
+      memorySize: 512,
+      role: batchProcessorRole,
+      environment: {
+        DFS_ENDPOINT: `${restApi.url}v1/forecast`,
+        ENV: srEnv,
+      },
+    });
+    this.batchPostProcessorFn.addEventSource(
+      new lambdaEventSources.S3EventSource(data.sagemakerBucket, {
+        events: [s3.EventType.OBJECT_CREATED],
+        filters: [{ prefix: "sagemaker/output/", suffix: ".csv" }],
+      }),
+    );
+
+    // ── ml-trigger Lambda ─────────────────────────────────────────────────────
+    // Runs on a daily EventBridge schedule; starts the SageMaker demand-forecast pipeline.
+    // Runs outside VPC for the same NAT reason as batch-post-processor above.
+    const sagemakerPipelineName = `smartretail-demand-forecast-${srEnv}`;
+    const mlTriggerRole = new iam.Role(this, "MlTriggerRole", {
+      assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName("service-role/AWSLambdaBasicExecutionRole"),
+      ],
+    });
+    mlTriggerRole.addToPolicy(new iam.PolicyStatement({
+      actions: ["sagemaker:StartPipelineExecution"],
+      resources: [
+        `arn:aws:sagemaker:${this.region}:${this.account}:pipeline/${sagemakerPipelineName}`,
+      ],
+    }));
+    data.eventsBucket.grantRead(mlTriggerRole);
+    data.sagemakerBucket.grantWrite(mlTriggerRole);
+
+    const mlTriggerFn = new lambda.DockerImageFunction(this, "MlTrigger", {
+      functionName: `smartretail-ml-trigger-${srEnv}`,
+      code: lambda.DockerImageCode.fromEcr(data.ecrRepos["ml-trigger"]),
+      architecture: lambda.Architecture.ARM_64,
+      timeout: cdk.Duration.seconds(300),
+      memorySize: 512,
+      role: mlTriggerRole,
+      environment: {
+        DFS_ENDPOINT:            `${restApi.url}v1/forecast`,
+        SAGEMAKER_PIPELINE_NAME: sagemakerPipelineName,
+        EVENTS_BUCKET:           data.eventsBucket.bucketName,
+        SAGEMAKER_BUCKET:        data.sagemakerBucket.bucketName,
+        ENV:                     srEnv,
+      },
+    });
+
+    const mlTriggerRule = new events.Rule(this, "MlTriggerSchedule", {
+      ruleName: `smartretail-ml-trigger-daily-${srEnv}`,
+      schedule: events.Schedule.cron({ hour: "2", minute: "0" }),
+      description: "Daily SageMaker demand forecast pipeline trigger",
+    });
+    mlTriggerRule.addTarget(new eventsTargets.LambdaFunction(mlTriggerFn));
+
+    // ── SSM outputs ───────────────────────────────────────────────────────────
+    const put = (name: string, value: string) =>
+      new ssm.StringParameter(this, name.replace(/[/-]/g, ""), {
+        parameterName: `/smartretail/${srEnv}/${name}`,
+        stringValue: value,
+      });
+
+    put("api/endpoint",           restApi.url);
+    put("firehose/stream-name",   this.firehoseStreamName);
+    put("sagemaker/pipeline-name", sagemakerPipelineName);
 
     new cdk.CfnOutput(this, "ApiEndpoint", {
       value: restApi.url,
       description: "SmartRetail Demo REST API endpoint (internal stage)",
+    });
+    new cdk.CfnOutput(this, "FirehoseStreamName", {
+      value: this.firehoseStreamName,
+      description: "Kinesis Firehose delivery stream name for POS event ingestion",
     });
   }
 }
