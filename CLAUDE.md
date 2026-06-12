@@ -427,6 +427,7 @@ Agents are defined in `.claude/settings.json`. Load the relevant one before star
 | Services crash-loop with "Failed to obtain JDBC connection" in demo | `application-aws.yml` not loaded for `demo` profile — `spring.datasource.password` unset | `password: ${DB_PASSWORD}` is now in base `application.yml`; rebuild + redeploy |
 | Correlation ID missing in logs              | `X-Correlation-ID` header not propagated through chain  | Use `CorrelationIdFilter` and MDC in every service       |
 | Lambdas fail in demo (no internet access)   | Lambda placed inside VPC but demo has no NAT gateway — Lambda in a public subnet gets only a private IP and cannot reach S3 or SageMaker API | Define demo Lambdas outside the VPC (no `vpc` prop); set `DFS_ENDPOINT` to the API GW URL, not CloudMap DNS (`smartretail-dfs-{env}.smartretail.local`) |
+| SageMaker pipeline shows "Active" in console but costs nothing | AWS Console shows `CfnPipeline` status as "Active" — this means the definition is registered, not that a job is running | Standing cost is $0; charges only accrue when `StartPipelineExecution` is called (training + transform jobs). The EventBridge cron is disabled by default (`enabled: false`) — activate via `aws events enable-rule` or CDK |
 
 ---
 

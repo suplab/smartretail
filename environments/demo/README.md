@@ -2,7 +2,7 @@
 
 Deploys the **SC Planner demo** on real AWS infrastructure. Intended lifespan: 1–2 days. All resources are tagged `Lifecycle=ephemeral` for easy cost tracking and cleanup.
 
-**What's deployed:** 6 backend services (SIS, IMS, RE, ARS, DFS, SUP), Kinesis Data Firehose → API GW → SIS ingestion pipeline, S3 events + SageMaker buckets, batch-post-processor Lambda, ml-trigger Lambda (daily schedule), SC Planner MFE only, REST API Gateway + internal NLB, SQS + EventBridge messaging, single-AZ RDS, CloudFront + S3 (OAC) for MFE hosting, Cognito for auth. Uses `environments/demo/infra/` (Min-* stack names).
+**What's deployed:** 6 backend services (SIS, IMS, RE, ARS, DFS, SUP), Kinesis Data Firehose → API GW → SIS ingestion pipeline, S3 events + SageMaker buckets, batch-post-processor Lambda, ml-trigger Lambda (daily schedule, disabled), SageMaker demand-forecast pipeline definition (dormant, $0 standing cost), SC Planner MFE only, REST API Gateway + internal NLB, SQS + EventBridge messaging, single-AZ RDS, CloudFront + S3 (OAC) for MFE hosting, Cognito for auth. Uses `environments/demo/infra/` (Min-* stack names).
 
 > For the full CDK stack spec and resource table see `environments/demo/infra/README.md`.
 
@@ -178,6 +178,7 @@ Here's the full breakdown pulled directly from all 7 demo CDK stacks:
 | S3 | events bucket + SageMaker bucket, minimal data | ~$0.05 |
 | ECR | 8 repos (6 services + 2 Lambdas), ~1.5 GB images | ~$0.15 |
 | Lambda | 2 functions, minimal invocations | ~$0.00 |
+| SageMaker pipeline definition | `CfnPipeline`, cron disabled (`enabled: false`) | $0.00 |
 | SQS / EventBridge / Cognito / SNS / SSM | Minimal usage, within free tiers | ~$0.50 |
 | **Total** | | **~$56/month** |
 
@@ -186,6 +187,7 @@ Here's the full breakdown pulled directly from all 7 demo CDK stacks:
 - No NAT Gateway — tasks use public IPs in the default VPC, saving ~$32/month vs a private-subnet setup.
 - At ~$1.87/day, a 2-day demo costs ~$3.75. **Run `make demo-destroy` after every demo session.**
 - Running `make demo-stop` each evening (9 h off) cuts RDS + Fargate cost by ~37%, saving ~$0.60/night.
+- SageMaker `CfnPipeline` is deployed but the EventBridge cron is disabled. Zero standing cost — charges only occur when `StartPipelineExecution` is called (~$0.54/run: training ~$0.48 + transform ~$0.06). To activate: `aws events enable-rule --name smartretail-ml-trigger-daily-demo` or set `enabled: true` in CDK and redeploy `Min-ApiStack`.
 
 ---
 

@@ -10,6 +10,7 @@ import * as lambdaEventSources from "aws-cdk-lib/aws-lambda-event-sources";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as events from "aws-cdk-lib/aws-events";
 import * as eventsTargets from "aws-cdk-lib/aws-events-targets";
+import * as sagemaker from "aws-cdk-lib/aws-sagemaker";
 import * as ssm from "aws-cdk-lib/aws-ssm";
 import { Construct } from "constructs";
 import { NetworkStack } from "./network-stack";
@@ -204,14 +205,14 @@ export class ApiStack extends cdk.Stack {
     // Runs outside VPC — demo has no NAT gateway, so DFS is reached via API GW URL.
     const batchProcessorRole = new iam.Role(this, "BatchProcessorRole", {
       assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
-      managedPolicies: [
-        iam.ManagedPolicy.fromAwsManagedPolicyName("service-role/AWSLambdaBasicExecutionRole"),
-      ],
+      managedPolicies: [iam.ManagedPolicy.fromAwsManagedPolicyName("service-role/AWSLambdaBasicExecutionRole")],
     });
-    batchProcessorRole.addToPolicy(new iam.PolicyStatement({
-      actions: ["s3:GetObject"],
-      resources: [data.sagemakerBucket.arnForObjects("sagemaker/output/*")],
-    }));
+    batchProcessorRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["s3:GetObject"],
+        resources: [data.sagemakerBucket.arnForObjects("sagemaker/output/*")],
+      }),
+    );
 
     this.batchPostProcessorFn = new lambda.DockerImageFunction(this, "BatchPostProcessor", {
       functionName: `smartretail-batch-post-processor-${srEnv}`,
@@ -238,16 +239,14 @@ export class ApiStack extends cdk.Stack {
     const sagemakerPipelineName = `smartretail-demand-forecast-${srEnv}`;
     const mlTriggerRole = new iam.Role(this, "MlTriggerRole", {
       assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
-      managedPolicies: [
-        iam.ManagedPolicy.fromAwsManagedPolicyName("service-role/AWSLambdaBasicExecutionRole"),
-      ],
+      managedPolicies: [iam.ManagedPolicy.fromAwsManagedPolicyName("service-role/AWSLambdaBasicExecutionRole")],
     });
-    mlTriggerRole.addToPolicy(new iam.PolicyStatement({
-      actions: ["sagemaker:StartPipelineExecution"],
-      resources: [
-        `arn:aws:sagemaker:${this.region}:${this.account}:pipeline/${sagemakerPipelineName}`,
-      ],
-    }));
+    mlTriggerRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["sagemaker:StartPipelineExecution"],
+        resources: [`arn:aws:sagemaker:${this.region}:${this.account}:pipeline/${sagemakerPipelineName}`],
+      }),
+    );
     data.eventsBucket.grantRead(mlTriggerRole);
     data.sagemakerBucket.grantWrite(mlTriggerRole);
 
@@ -257,22 +256,44 @@ export class ApiStack extends cdk.Stack {
       architecture: lambda.Architecture.ARM_64,
       timeout: cdk.Duration.seconds(300),
       memorySize: 512,
+      reservedConcurrentExecutions: 0, // throttles all invocations; set to 1 (or remove) to enable
       role: mlTriggerRole,
       environment: {
-        DFS_ENDPOINT:            `${restApi.url}v1/forecast`,
+        DFS_ENDPOINT: `${restApi.url}v1/forecast`,
         SAGEMAKER_PIPELINE_NAME: sagemakerPipelineName,
-        EVENTS_BUCKET:           data.eventsBucket.bucketName,
-        SAGEMAKER_BUCKET:        data.sagemakerBucket.bucketName,
-        ENV:                     srEnv,
+        EVENTS_BUCKET: data.eventsBucket.bucketName,
+        SAGEMAKER_BUCKET: data.sagemakerBucket.bucketName,
+        ENV: srEnv,
       },
     });
+
+    mlTriggerRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["sagemaker:DescribePipelineExecution"],
+        resources: [`arn:aws:sagemaker:${this.region}:${this.account}:pipeline/${sagemakerPipelineName}/*`],
+      }),
+    );
 
     const mlTriggerRule = new events.Rule(this, "MlTriggerSchedule", {
       ruleName: `smartretail-ml-trigger-daily-${srEnv}`,
       schedule: events.Schedule.cron({ hour: "2", minute: "0" }),
       description: "Daily SageMaker demand forecast pipeline trigger",
+      enabled: false,
     });
     mlTriggerRule.addTarget(new eventsTargets.LambdaFunction(mlTriggerFn));
+
+    new sagemaker.CfnPipeline(this, "DemandForecastPipeline", {
+      pipelineName: sagemakerPipelineName,
+      roleArn: data.sagemakerExecutionRole.roleArn,
+      pipelineDefinition: {
+        pipelineDefinitionBody: JSON.stringify(buildDemandForecastPipelineDefinition(data.sagemakerBucket.bucketName)),
+      },
+      tags: [
+        { key: "Environment", value: srEnv },
+        { key: "Project", value: "SmartRetail" },
+        { key: "Lifecycle", value: "ephemeral" },
+      ],
+    });
 
     // ── SSM outputs ───────────────────────────────────────────────────────────
     const put = (name: string, value: string) =>
@@ -281,8 +302,8 @@ export class ApiStack extends cdk.Stack {
         stringValue: value,
       });
 
-    put("api/endpoint",           restApi.url);
-    put("firehose/stream-name",   this.firehoseStreamName);
+    put("api/endpoint", restApi.url);
+    put("firehose/stream-name", this.firehoseStreamName);
     put("sagemaker/pipeline-name", sagemakerPipelineName);
 
     new cdk.CfnOutput(this, "ApiEndpoint", {
@@ -294,4 +315,89 @@ export class ApiStack extends cdk.Stack {
       description: "Kinesis Firehose delivery stream name for POS event ingestion",
     });
   }
+}
+
+function buildDemandForecastPipelineDefinition(sagemakerBucket: string) {
+  return {
+    Version: "2020-12-01",
+    Parameters: [{ Name: "RunId", Type: "String" }],
+    Steps: [
+      {
+        Name: "TrainDeepAR",
+        Type: "Training",
+        Arguments: {
+          AlgorithmSpecification: {
+            TrainingImage: "382416733822.dkr.ecr.us-east-1.amazonaws.com/forecasting-deepar:1",
+            TrainingInputMode: "File",
+          },
+          InputDataConfig: [
+            {
+              ChannelName: "train",
+              DataSource: {
+                S3DataSource: {
+                  S3Uri: `s3://${sagemakerBucket}/sagemaker/training/train.jsonl`,
+                  S3DataType: "S3Prefix",
+                },
+              },
+              ContentType: "application/jsonlines",
+            },
+            {
+              ChannelName: "test",
+              DataSource: {
+                S3DataSource: {
+                  S3Uri: `s3://${sagemakerBucket}/sagemaker/training/test.jsonl`,
+                  S3DataType: "S3Prefix",
+                },
+              },
+              ContentType: "application/jsonlines",
+            },
+          ],
+          OutputDataConfig: { S3OutputPath: `s3://${sagemakerBucket}/sagemaker/model/` },
+          ResourceConfig: { InstanceType: "ml.c5.xlarge", InstanceCount: 1, VolumeSizeInGB: 20 },
+          StoppingCondition: { MaxRuntimeInSeconds: 7200 },
+          HyperParameters: {
+            prediction_length: "30",
+            context_length: "90",
+            epochs: "100",
+            num_cells: "40",
+            num_layers: "2",
+            likelihood: "gaussian",
+          },
+        },
+      },
+      {
+        Name: "BatchTransform",
+        Type: "Transform",
+        DependsOn: ["TrainDeepAR"],
+        Arguments: {
+          ModelName: { Get: "Steps.TrainDeepAR.ModelArtifacts.S3ModelArtifacts" },
+          TransformInput: {
+            DataSource: {
+              S3DataSource: {
+                S3Uri: {
+                  "Std:Join": {
+                    On: "/",
+                    Values: [`s3://${sagemakerBucket}/sagemaker/transform-input`, { Get: "Parameters.RunId" }],
+                  },
+                },
+                S3DataType: "S3Prefix",
+              },
+            },
+            ContentType: "application/jsonlines",
+            SplitType: "Line",
+          },
+          TransformOutput: {
+            S3OutputPath: {
+              "Std:Join": {
+                On: "/",
+                Values: [`s3://${sagemakerBucket}/sagemaker/output`, { Get: "Parameters.RunId" }],
+              },
+            },
+            AssembleWith: "Line",
+          },
+          TransformResources: { InstanceType: "ml.m5.large", InstanceCount: 1 },
+        },
+      },
+    ],
+  };
 }

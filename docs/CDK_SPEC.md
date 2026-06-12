@@ -585,7 +585,8 @@ Creates:
 - API Gateway REST API (six `/v1/{service}/{proxy+}` routes)
 - Kinesis Data Firehose delivery stream (`smartretail-ingest-{env}`) → API GW → SIS
 - batch-post-processor Lambda (outside VPC in demo; inside VPC in dev)
-- ml-trigger Lambda + daily EventBridge schedule
+- ml-trigger Lambda + daily EventBridge schedule (disabled by default — `enabled: false`)
+- SageMaker demand-forecast pipeline definition (`smartretail-demand-forecast-{env}`, $0 standing cost)
  
 ### VPC Link
  
@@ -622,10 +623,29 @@ const authoriser = new apigateway.CognitoUserPoolsAuthorizer(this, 'InternalAuth
 });
 ```
  
+### SageMaker Demand-Forecast Pipeline
+
+`CfnPipeline` (`smartretail-demand-forecast-{env}`) — a named pipeline definition stored by SageMaker. No compute starts until `StartPipelineExecution` is called explicitly. **Standing cost: $0.**
+
+Two-step pipeline triggered by the ml-trigger Lambda with parameter `RunId`:
+
+| Step | Type | Instance | ~Duration | ~Cost/run |
+|------|------|----------|-----------|-----------|
+| `TrainDeepAR` | Training | ml.c5.xlarge | ~2 hr | ~$0.48 |
+| `BatchTransform` | Transform | ml.m5.large | ~0.5 hr | ~$0.06 |
+
+- Training image: `382416733822.dkr.ecr.us-east-1.amazonaws.com/forecasting-deepar:1` (AWS-managed)
+- Hyperparameters: `prediction_length=30`, `context_length=90`, `epochs=100`
+- Training input: `s3://{sagemakerBucket}/sagemaker/training/` (written by ml-trigger)
+- Transform output: `s3://{sagemakerBucket}/sagemaker/output/{RunId}/` (triggers batch-post-processor Lambda)
+- EventBridge cron created with `enabled: false`; re-enable via `aws events enable-rule --name smartretail-ml-trigger-daily-{env}` or set `enabled: true` in CDK and redeploy
+
 ### Outputs
 ```
 /smartretail/{env}/api-gateway/endpoint
 /smartretail/{env}/api-gateway/id
+/smartretail/{env}/firehose/stream-name
+/smartretail/{env}/sagemaker/pipeline-name
 ```
 
 ---
