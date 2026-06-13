@@ -184,7 +184,7 @@ export class ApiStack extends cdk.Stack {
           accessKey: data.firehoseAccessKeySecret.secretValue.unsafeUnwrap(),
         },
         bufferingHints: { sizeInMBs: 1, intervalInSeconds: 60 },
-        retryOptions: { durationInSeconds: 86400 },
+        retryOptions: { durationInSeconds: 7200 },
         s3BackupMode: "AllData",
         s3Configuration: {
           bucketArn: data.eventsBucket.bucketArn,
