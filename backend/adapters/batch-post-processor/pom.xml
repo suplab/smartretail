@@ -66,6 +66,7 @@
     </dependencies>
 
     <build>
+        <finalName>smartretail-batch-post-processor</finalName>
         <plugins>
             <!-- Skip Spring Boot repackage — Lambda uses shade fat JAR -->
             <plugin>

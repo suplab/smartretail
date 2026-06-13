@@ -53,10 +53,10 @@ cd environments/demo/infra && AWS_PROFILE=smartretail-dev SMARTRETAIL_ENV=demo \
   npx cdk deploy Min-NetworkStack Min-DataStack Min-MessagingStack Min-IdentityStack \
   --require-approval never
 
-# 2b. Build and push 6 service images + 2 Lambda images — ECR repos now exist
+# 2b. Build 6 service images + Lambda JARs — ECR repos now exist
 cd ../../..
 make demo-push-services DEMO_ENV=demo DEMO_PROFILE=smartretail-dev
-make demo-push-lambda DEMO_ENV=demo DEMO_PROFILE=smartretail-dev
+make demo-build-lambda   # builds batch-post-processor + ml-trigger JARs (no Docker)
 
 # 2c. Deploy remaining stacks (ECS can now pull images successfully)
 cd environments/demo/infra && AWS_PROFILE=smartretail-dev SMARTRETAIL_ENV=demo \
@@ -93,7 +93,7 @@ make demo-create-users DEMO_ENV=demo
 |--------|---------|
 | Service code | `make demo-deploy-services` (build + push + force ECS redeploy) |
 | Single service (e.g. re) | `docker buildx build … && docker push … && aws ecs update-service …` |
-| Lambda images | `make demo-push-lambda` |
+| Lambda JARs | `make demo-build-lambda` (then redeploy `Min-ApiStack`) |
 | Flyway image | `make demo-push-flyway` |
 | MFE code | `make demo-deploy-mfe` |
 | DB migration | `make demo-migrate` |
@@ -176,7 +176,7 @@ Here's the full breakdown pulled directly from all 7 demo CDK stacks:
 | API Gateway (REST) | Low demo traffic (~100k calls) | ~$0.50 |
 | Kinesis Data Firehose | Low event volume (<1 GB/month) | ~$0.03 |
 | S3 | events bucket + SageMaker bucket, minimal data | ~$0.05 |
-| ECR | 8 repos (6 services + 2 Lambdas), ~1.5 GB images | ~$0.15 |
+| ECR | 6 repos (6 services), ~1.2 GB images | ~$0.12 |
 | Lambda | 2 functions, minimal invocations | ~$0.00 |
 | SageMaker pipeline definition | `CfnPipeline`, cron disabled (`enabled: false`) | $0.00 |
 | SQS / EventBridge / Cognito / SNS / SSM | Minimal usage, within free tiers | ~$0.50 |

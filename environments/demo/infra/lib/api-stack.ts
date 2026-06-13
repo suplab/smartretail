@@ -6,8 +6,6 @@ import * as apigw from "aws-cdk-lib/aws-apigateway";
 import * as firehose from "aws-cdk-lib/aws-kinesisfirehose";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as lambda from "aws-cdk-lib/aws-lambda";
-import * as lambdaEventSources from "aws-cdk-lib/aws-lambda-event-sources";
-import * as s3 from "aws-cdk-lib/aws-s3";
 import * as events from "aws-cdk-lib/aws-events";
 import * as eventsTargets from "aws-cdk-lib/aws-events-targets";
 import * as sagemaker from "aws-cdk-lib/aws-sagemaker";
@@ -29,7 +27,7 @@ export class ApiStack extends cdk.Stack {
   /** REST API name — used by MonitoringStack for CloudWatch metric dimensions (ApiName + Stage) */
   public readonly restApiName: string;
   public readonly firehoseStreamName: string;
-  public readonly batchPostProcessorFn: lambda.DockerImageFunction;
+  public readonly batchPostProcessorFn: lambda.Function;
 
   constructor(scope: Construct, id: string, props: ApiStackProps) {
     super(scope, id, props);
@@ -214,9 +212,11 @@ export class ApiStack extends cdk.Stack {
       }),
     );
 
-    this.batchPostProcessorFn = new lambda.DockerImageFunction(this, "BatchPostProcessor", {
+    this.batchPostProcessorFn = new lambda.Function(this, "BatchPostProcessor", {
       functionName: `smartretail-batch-post-processor-${srEnv}`,
-      code: lambda.DockerImageCode.fromEcr(data.ecrRepos["batch-post-processor"]),
+      runtime: lambda.Runtime.JAVA_21,
+      handler: "com.smartretail.lambda.batchpostprocessor.BatchPostProcessorHandler::handleRequest",
+      code: lambda.Code.fromAsset("../../../backend/adapters/batch-post-processor/target/smartretail-batch-post-processor.jar"),
       architecture: lambda.Architecture.ARM_64,
       timeout: cdk.Duration.seconds(180),
       memorySize: 512,
@@ -226,12 +226,23 @@ export class ApiStack extends cdk.Stack {
         ENV: srEnv,
       },
     });
-    this.batchPostProcessorFn.addEventSource(
-      new lambdaEventSources.S3EventSource(data.sagemakerBucket, {
-        events: [s3.EventType.OBJECT_CREATED],
-        filters: [{ prefix: "sagemaker/output/", suffix: ".csv" }],
-      }),
-    );
+    // S3EventSource writes a BucketNotification into DataStack (where the bucket lives),
+    // which would reference this Lambda's ARN — creating a Min-DataStack → Min-ApiStack
+    // dependency that cycles back. Instead, the sagemakerBucket has eventBridgeEnabled:true
+    // and we create an EventBridge rule here in ApiStack with no cross-stack reference.
+    const sagemakerOutputRule = new events.Rule(this, "SageMakerOutputCreated", {
+      ruleName: `smartretail-sagemaker-output-${srEnv}`,
+      eventPattern: {
+        source: ["aws.s3"],
+        detailType: ["Object Created"],
+        detail: {
+          bucket: { name: [data.sagemakerBucket.bucketName] },
+          object: { key: [{ prefix: "sagemaker/output/" }, { suffix: ".csv" }] },
+        },
+      },
+      description: "Fires when SageMaker transform output CSV lands in S3; triggers batch-post-processor",
+    });
+    sagemakerOutputRule.addTarget(new eventsTargets.LambdaFunction(this.batchPostProcessorFn));
 
     // ── ml-trigger Lambda ─────────────────────────────────────────────────────
     // Runs on a daily EventBridge schedule; starts the SageMaker demand-forecast pipeline.
@@ -250,9 +261,11 @@ export class ApiStack extends cdk.Stack {
     data.eventsBucket.grantRead(mlTriggerRole);
     data.sagemakerBucket.grantWrite(mlTriggerRole);
 
-    const mlTriggerFn = new lambda.DockerImageFunction(this, "MlTrigger", {
+    const mlTriggerFn = new lambda.Function(this, "MlTrigger", {
       functionName: `smartretail-ml-trigger-${srEnv}`,
-      code: lambda.DockerImageCode.fromEcr(data.ecrRepos["ml-trigger"]),
+      runtime: lambda.Runtime.JAVA_21,
+      handler: "com.smartretail.lambda.mltrigger.MlTriggerHandler::handleRequest",
+      code: lambda.Code.fromAsset("../../../backend/adapters/ml-trigger/target/smartretail-ml-trigger.jar"),
       architecture: lambda.Architecture.ARM_64,
       timeout: cdk.Duration.seconds(300),
       memorySize: 512,
