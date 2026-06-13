@@ -136,6 +136,16 @@ export class DataStack extends cdk.Stack {
     this.sagemakerBucket.grantReadWrite(this.sagemakerExecutionRole);
     this.eventsBucket.grantRead(this.sagemakerExecutionRole);
 
+    // ── ECR repos for Lambda adapters ─────────────────────────────────────────
+    for (const name of ["batch-post-processor", "ml-trigger"] as const) {
+      this.ecrRepos[name] = new ecr.Repository(this, `${name}Repo`.replace(/-/g, ""), {
+        repositoryName: `smartretail-${name}-${srEnv}`,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+        emptyOnDelete: true,
+        lifecycleRules: [{ maxImageCount: 5 }],
+      });
+    }
+
     const put = (name: string, value: string) =>
       new ssm.StringParameter(this, name.replace(/[/-]/g, ""), {
         parameterName: `/smartretail/${srEnv}/${name}`,

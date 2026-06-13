@@ -7,12 +7,12 @@ DEMO_ENV     ?= demo
 DEMO_PROFILE ?= $(PROFILE)
 DEMO_SERVICES = sis ims re ars dfs sup
 
-demo-bootstrap: demo-build-lambda ## Bootstrap CDK for demo environment (run once per account/region)
+demo-bootstrap: ## Bootstrap CDK for demo environment (run once per account/region)
 	cd environments/demo/infra && npm install --silent && \
 	AWS_PROFILE=$(DEMO_PROFILE) npx cdk bootstrap \
 	    aws://$(shell AWS_PROFILE=$(DEMO_PROFILE) aws sts get-caller-identity --query Account --output text)/$(REGION)
 
-demo-cdk-deploy: demo-build-lambda ## Deploy all Min-* CDK stacks (trimmed SC Planner demo)
+demo-cdk-deploy: ## Deploy all Min-* CDK stacks (trimmed SC Planner demo)
 	cd environments/demo/infra && \
 	AWS_PROFILE=$(DEMO_PROFILE) SMARTRETAIL_ENV=$(DEMO_ENV) \
 	    npx cdk deploy --all --require-approval never \
@@ -44,9 +44,15 @@ demo-deploy-services: demo-push-services ## Build, push and force ECS redeployme
 	        --query 'service.serviceName' --output text; \
 	done
 
-demo-build-lambda: ## Build Lambda JARs (batch-post-processor + ml-trigger) — no Docker required
-	cd backend/adapters/batch-post-processor && mvn package -q -DskipTests
-	cd backend/adapters/ml-trigger && mvn package -q -DskipTests
+demo-push-lambda: aws-ecr-login docker-build-lambda ## Build arm64 Lambda images and push to demo ECR
+	@ACCOUNT=$(shell AWS_PROFILE=$(DEMO_PROFILE) aws sts get-caller-identity --query Account --output text); \
+	for fn in batch-post-processor ml-trigger; do \
+	    echo "Pushing $$fn ($(DEMO_ENV))..."; \
+	    docker tag smartretail-$$fn:local \
+	        $$ACCOUNT.dkr.ecr.$(REGION).amazonaws.com/smartretail-$$fn-$(DEMO_ENV):latest; \
+	    docker push \
+	        $$ACCOUNT.dkr.ecr.$(REGION).amazonaws.com/smartretail-$$fn-$(DEMO_ENV):latest; \
+	done
 
 demo-push-flyway: aws-ecr-login docker-build-flyway-amd64 ## Build amd64 Flyway image and push to demo ECR
 	@ACCOUNT=$(shell AWS_PROFILE=$(DEMO_PROFILE) aws sts get-caller-identity --query Account --output text); \

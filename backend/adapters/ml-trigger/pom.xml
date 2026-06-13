@@ -77,7 +77,6 @@
     </dependencies>
 
     <build>
-        <finalName>smartretail-ml-trigger</finalName>
         <plugins>
             <!-- Skip Spring Boot repackage — Lambda uses shade fat JAR -->
             <plugin>

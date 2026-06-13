@@ -27,7 +27,7 @@ export class ApiStack extends cdk.Stack {
   /** REST API name — used by MonitoringStack for CloudWatch metric dimensions (ApiName + Stage) */
   public readonly restApiName: string;
   public readonly firehoseStreamName: string;
-  public readonly batchPostProcessorFn: lambda.Function;
+  public readonly batchPostProcessorFn: lambda.DockerImageFunction;
 
   constructor(scope: Construct, id: string, props: ApiStackProps) {
     super(scope, id, props);
@@ -212,11 +212,9 @@ export class ApiStack extends cdk.Stack {
       }),
     );
 
-    this.batchPostProcessorFn = new lambda.Function(this, "BatchPostProcessor", {
+    this.batchPostProcessorFn = new lambda.DockerImageFunction(this, "BatchPostProcessor", {
       functionName: `smartretail-batch-post-processor-${srEnv}`,
-      runtime: lambda.Runtime.JAVA_21,
-      handler: "com.smartretail.lambda.batchpostprocessor.BatchPostProcessorHandler::handleRequest",
-      code: lambda.Code.fromAsset("../../../backend/adapters/batch-post-processor/target/smartretail-batch-post-processor.jar"),
+      code: lambda.DockerImageCode.fromEcr(data.ecrRepos["batch-post-processor"]),
       architecture: lambda.Architecture.ARM_64,
       timeout: cdk.Duration.seconds(180),
       memorySize: 512,
@@ -261,11 +259,9 @@ export class ApiStack extends cdk.Stack {
     data.eventsBucket.grantRead(mlTriggerRole);
     data.sagemakerBucket.grantWrite(mlTriggerRole);
 
-    const mlTriggerFn = new lambda.Function(this, "MlTrigger", {
+    const mlTriggerFn = new lambda.DockerImageFunction(this, "MlTrigger", {
       functionName: `smartretail-ml-trigger-${srEnv}`,
-      runtime: lambda.Runtime.JAVA_21,
-      handler: "com.smartretail.lambda.mltrigger.MlTriggerHandler::handleRequest",
-      code: lambda.Code.fromAsset("../../../backend/adapters/ml-trigger/target/smartretail-ml-trigger.jar"),
+      code: lambda.DockerImageCode.fromEcr(data.ecrRepos["ml-trigger"]),
       architecture: lambda.Architecture.ARM_64,
       timeout: cdk.Duration.seconds(300),
       memorySize: 512,
@@ -295,17 +291,20 @@ export class ApiStack extends cdk.Stack {
     });
     mlTriggerRule.addTarget(new eventsTargets.LambdaFunction(mlTriggerFn));
 
-    new sagemaker.CfnPipeline(this, "DemandForecastPipeline", {
+    // pipelineDefinitionBody is not converted to PascalCase by CDK's cfn synthesiser for this
+    // union-typed property — use addPropertyOverride to emit the correct CloudFormation key.
+    const demandForecastPipeline = new sagemaker.CfnPipeline(this, "DemandForecastPipeline", {
       pipelineName: sagemakerPipelineName,
       roleArn: data.sagemakerExecutionRole.roleArn,
-      pipelineDefinition: {
-        pipelineDefinitionBody: JSON.stringify(buildDemandForecastPipelineDefinition(data.sagemakerBucket.bucketName)),
-      },
+      pipelineDefinition: {} as sagemaker.CfnPipeline.PipelineDefinitionProperty, // overridden below
       tags: [
         { key: "Environment", value: srEnv },
         { key: "Project", value: "SmartRetail" },
         { key: "Lifecycle", value: "ephemeral" },
       ],
+    });
+    demandForecastPipeline.addPropertyOverride("PipelineDefinition", {
+      PipelineDefinitionBody: JSON.stringify(buildDemandForecastPipelineDefinition(data.sagemakerBucket.bucketName)),
     });
 
     // ── SSM outputs ───────────────────────────────────────────────────────────
