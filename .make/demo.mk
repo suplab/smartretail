@@ -7,12 +7,12 @@ DEMO_ENV     ?= demo
 DEMO_PROFILE ?= $(PROFILE)
 DEMO_SERVICES = sis ims re ars dfs sup
 
-demo-bootstrap: ## Bootstrap CDK for demo environment (run once per account/region)
+demo-bootstrap: demo-build-lambda ## Bootstrap CDK for demo environment (run once per account/region)
 	cd environments/demo/infra && npm install --silent && \
 	AWS_PROFILE=$(DEMO_PROFILE) npx cdk bootstrap \
 	    aws://$(shell AWS_PROFILE=$(DEMO_PROFILE) aws sts get-caller-identity --query Account --output text)/$(REGION)
 
-demo-cdk-deploy: ## Deploy all Min-* CDK stacks (trimmed SC Planner demo)
+demo-cdk-deploy: demo-build-lambda ## Deploy all Min-* CDK stacks (trimmed SC Planner demo)
 	cd environments/demo/infra && \
 	AWS_PROFILE=$(DEMO_PROFILE) SMARTRETAIL_ENV=$(DEMO_ENV) \
 	    npx cdk deploy --all --require-approval never \
