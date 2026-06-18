@@ -3,6 +3,7 @@ import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as ecr from "aws-cdk-lib/aws-ecr";
 import * as rds from "aws-cdk-lib/aws-rds";
 import * as logs from "aws-cdk-lib/aws-logs";
+import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import * as ssm from "aws-cdk-lib/aws-ssm";
 import { Construct } from "constructs";
 import { NetworkStack } from "./network-stack";
@@ -19,6 +20,7 @@ export class DataStack extends cdk.Stack {
   public readonly dbEndpoint: string;
   public readonly rdsInstance: rds.DatabaseInstance;
   public readonly ecrRepos: Record<string, ecr.Repository> = {};
+  public readonly firehoseIngestKeySecret: secretsmanager.Secret;
 
   constructor(scope: Construct, id: string, props: DataStackProps) {
     super(scope, id, props);
@@ -66,6 +68,19 @@ export class DataStack extends cdk.Stack {
       });
     }
 
+    // Firehose ingest access key — validated by SIS FirehoseBatchFilter on every
+    // X-Amz-Firehose-Request-Id delivery.  Value is auto-generated; copy it into
+    // the Firehose HTTP endpoint destination config after first deploy.
+    this.firehoseIngestKeySecret = new secretsmanager.Secret(this, "FirehoseIngestKey", {
+      secretName: `/smartretail/${srEnv}/firehose/ingest-access-key`,
+      description: "Static access key sent by Firehose to SIS /v1/ingest/events (X-Amz-Firehose-Access-Key header)",
+      generateSecretString: {
+        excludePunctuation: true,
+        passwordLength: 40,
+      },
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
     const put = (name: string, value: string) =>
       new ssm.StringParameter(this, name.replace(/[/-]/g, ""), {
         parameterName: `/smartretail/${srEnv}/${name}`,
@@ -74,5 +89,6 @@ export class DataStack extends cdk.Stack {
 
     put("rds/instance-endpoint", this.rdsInstance.instanceEndpoint.hostname);
     put("rds/secret-arn", this.rdsInstance.secret!.secretArn);
+    put("firehose/ingest-key-secret-arn", this.firehoseIngestKeySecret.secretArn);
   }
 }
