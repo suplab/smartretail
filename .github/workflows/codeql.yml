@@ -1,0 +1,58 @@
+name: CodeQL
+
+# Runs CodeQL static analysis on the Java stack.
+#   • On every pull request targeting main/develop (the PR gate the team asked for).
+#   • On pushes to main/develop so the default-branch baseline stays current.
+#   • Weekly, to pick up newly published CodeQL query updates.
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main, develop]
+  schedule:
+    - cron: '0 3 * * 1'   # Mondays 03:00 UTC
+
+# Cancel superseded runs on the same PR/branch to save CI minutes.
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (java)
+    runs-on: ubuntu-latest
+    permissions:
+      # Required for CodeQL to upload results to the Security tab.
+      security-events: write
+      # Needed by the CodeQL Action to read the workflow run.
+      actions: read
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      # build-mode "none" analyses the Java sources directly without running the
+      # full Maven build. This avoids the OpenAPI code-generation / Testcontainers
+      # steps the normal build needs, and is the reliable choice for a PR gate.
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: java-kotlin
+          build-mode: none
+          # security-extended pulls in more security queries than the default set,
+          # so injected issues (SQL injection, command injection, weak crypto, …)
+          # are caught on the PR.
+          queries: security-extended
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:java-kotlin
